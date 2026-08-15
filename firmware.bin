@@ -1,0 +1,408 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_NeoPixel.h>
+
+// --- WIFI & OTA LIBRARIES ---
+#include <WiFi.h>
+#include <WiFiManager.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <WiFiClientSecure.h>
+
+// ==========================================
+//           OTA CONFIGURATION
+// ==========================================
+const float FIRMWARE_VERSION = 1.0; // Increment this when you make new code!
+
+// Change "your-username" and "repo-name" to your actual GitHub info.
+// Make sure to use the "raw.githubusercontent.com" URLs!
+const char* VERSION_CHECK_URL = "https://raw.githubusercontent.com/your-username/repo-name/main/version.txt";
+const char* FIRMWARE_BIN_URL  = "https://raw.githubusercontent.com/your-username/repo-name/main/firmware.bin";
+
+// ==========================================
+//           HARDWARE PINS
+// ==========================================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+#define BUTTON_PIN 13    
+#define LED_PIN    4     
+#define BUZZER_PIN 18    
+#define NUM_LEDS   8     
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+// ==========================================
+//           MODES & TIMERS
+// ==========================================
+int displayMode = 0; // 0 = MENU, 1 = SONG+HEART, 2 = SECRET, 3 = PASSIVE PULSE
+unsigned long startTime = 0;
+const unsigned long HEART_TIME_LIMIT = 8000;   // Song mode runs for 8 seconds
+const unsigned long SECRET_TIME_LIMIT = 15000; // Secret mode runs for 15 seconds
+bool isInterrupted = false;
+
+// ==========================================
+//           SECRET MESSAGE
+// ==========================================
+const char* secretMessage = 
+  "Mirabel,\n"
+  "Every hike, every\n"
+  "road trip, and every\n"
+  "moment with you is\n"
+  "my absolute favorite.\n"
+  "\n"
+  "Happy Anniversary.\n"
+  "I love you.";
+
+// ==========================================
+//           NOTE FREQUENCIES
+// ==========================================
+#define NOTE_C4  262
+#define NOTE_D4  294
+#define NOTE_E4  330
+#define NOTE_F4  349
+#define NOTE_G4  392
+#define NOTE_A4  440
+#define NOTE_B4  494
+#define NOTE_C5  523
+#define NOTE_D5  587
+#define NOTE_Eb5 622
+#define NOTE_E5  659
+#define NOTE_F5  698
+#define NOTE_Fs5 740
+#define NOTE_G5  784
+#define NOTE_Gs5 831
+#define NOTE_A5  880
+#define NOTE_C6  1047
+
+// ==========================================
+//           HELPER FUNCTIONS
+// ==========================================
+
+void smartDelay(int ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      delay(50); 
+      if (digitalRead(BUTTON_PIN) == LOW) {
+        isInterrupted = true;
+        while(digitalRead(BUTTON_PIN) == LOW) delay(10); 
+        return;
+      }
+    }
+    delay(10);
+  }
+}
+
+void setStripColor(uint8_t r, uint8_t g, uint8_t b) {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    strip.setPixelColor(i, strip.Color(r, g, b));
+  }
+  strip.show();
+}
+
+void drawHeart(int cx, int cy, float s) {
+  display.fillCircle(cx - (4 * s), cy - (3 * s), 4 * s, SSD1306_WHITE);
+  display.fillCircle(cx + (4 * s), cy - (3 * s), 4 * s, SSD1306_WHITE);
+  display.fillTriangle(
+    cx - (8 * s), cy - (2 * s),
+    cx + (8 * s), cy - (2 * s),
+    cx, cy + (9 * s),
+    SSD1306_WHITE
+  );
+}
+
+void drawMenuScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  
+  // Cute heart icon in top right
+  display.fillCircle(115, 6, 3, SSD1306_WHITE);
+  display.fillCircle(121, 6, 3, SSD1306_WHITE);
+  display.fillTriangle(112, 7, 124, 7, 118, 13, SSD1306_WHITE);
+
+  display.setCursor(0, 4);
+  display.print("Waiting...");
+  display.drawLine(0, 16, 128, 16, SSD1306_WHITE); 
+
+  display.setCursor(0, 24);
+  display.print("1 Click : Play Tune");
+  display.setCursor(0, 40);
+  display.print("2 Clicks: Passive");
+  display.setCursor(0, 56);
+  display.print("3 Clicks: Secret");
+  
+  display.display();
+}
+
+void turnOffDevice() {
+  displayMode = 0;
+  isInterrupted = false;
+  noTone(BUZZER_PIN);
+  setStripColor(0, 0, 0); 
+  drawMenuScreen();
+}
+
+// ==========================================
+//           SONG FUNCTIONS
+// ==========================================
+
+void playMario() {
+  int notes[] = {NOTE_E5, NOTE_E5, 0, NOTE_E5, 0, NOTE_C5, NOTE_E5, 0, NOTE_G5};
+  int durations[] = {100, 100, 100, 100, 100, 100, 100, 100, 200};
+  for (int i = 0; i < 9; i++) {
+    if (notes[i] == 0) noTone(BUZZER_PIN);
+    else tone(BUZZER_PIN, notes[i], durations[i]);
+    delay(durations[i]);
+  }
+}
+
+void playZelda() {
+  int notes[] = {NOTE_G5, NOTE_Fs5, NOTE_Eb5, NOTE_A4, NOTE_Gs5, NOTE_E5, NOTE_Gs5, NOTE_C6};
+  for (int i = 0; i < 8; i++) {
+    tone(BUZZER_PIN, notes[i], 120);
+    delay(140);
+  }
+}
+
+void playStarWars() {
+  int notes[] = {NOTE_G4, NOTE_G4, NOTE_G4, NOTE_C5, NOTE_G5, NOTE_F5, NOTE_E5, NOTE_D5, NOTE_C6, NOTE_G5};
+  int durations[] = {150, 150, 150, 400, 400, 100, 100, 100, 400, 300};
+  for (int i = 0; i < 10; i++) {
+    tone(BUZZER_PIN, notes[i], durations[i]);
+    delay(durations[i] + 30);
+  }
+}
+
+void playRandomSong() {
+  setStripColor(50, 50, 255); 
+  int choice = random(0, 3);
+  if (choice == 0) playMario();
+  else if (choice == 1) playZelda();
+  else playStarWars();
+  noTone(BUZZER_PIN);
+}
+
+// ==========================================
+//           REMOTE OTA UPDATE
+// ==========================================
+
+void checkForRemoteFirmwareUpdate() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  display.clearDisplay();
+  display.setCursor(0, 20);
+  display.print("Checking for updates..");
+  display.display();
+
+  WiFiClientSecure client;
+  client.setInsecure(); // Allow HTTPS connection without root certs
+
+  HTTPClient http;
+  http.begin(client, VERSION_CHECK_URL);
+  int httpCode = http.GET();
+
+  if (httpCode == HTTP_CODE_OK) {
+    float newVersion = http.getString().toFloat();
+
+    if (newVersion > FIRMWARE_VERSION) {
+      display.clearDisplay();
+      display.setCursor(0, 20);
+      display.print("Downloading update...");
+      display.display();
+      setStripColor(0, 0, 255); // Solid blue during OTA download
+
+      t_httpUpdate_return ret = httpUpdate.update(client, FIRMWARE_BIN_URL);
+
+      switch (ret) {
+        case HTTP_UPDATE_FAILED:
+          Serial.printf("Update Failed: %s\n", httpUpdate.getLastErrorString().c_str());
+          break;
+        case HTTP_UPDATE_NO_UPDATES:
+          break;
+        case HTTP_UPDATE_OK:
+          break; // Board will automatically reboot here
+      }
+    }
+  }
+  http.end();
+  setStripColor(0, 0, 0); // Turn LEDs back off
+}
+
+// ==========================================
+//           SETUP
+// ==========================================
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  randomSeed(analogRead(34)); 
+
+  strip.begin();
+  strip.setBrightness(120);
+  setStripColor(0, 0, 0);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("SSD1306 allocation failed");
+    for (;;);
+  }
+
+  // --- WiFiManager Captive Portal ---
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 10);
+  display.print("If new location, join:");
+  display.setCursor(0, 26);
+  display.print("Mirabel-Gift-Setup");
+  display.setCursor(0, 42);
+  display.print("on your phone.");
+  display.display();
+
+  WiFiManager wm;
+  // This blocks until connected. If no saved Wi-Fi is found, it spins up the portal.
+  wm.autoConnect("Mirabel-Gift-Setup");
+
+  // --- Check for GitHub OTA Updates ---
+  checkForRemoteFirmwareUpdate();
+
+  // Show main menu once ready
+  drawMenuScreen();
+}
+
+// ==========================================
+//           MAIN LOOP
+// ==========================================
+
+void loop() {
+  // --- MULTI-CLICK BUTTON LOGIC ---
+  if (displayMode == 0 && digitalRead(BUTTON_PIN) == LOW) {
+    delay(50); 
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      
+      int clicks = 1;
+      while(digitalRead(BUTTON_PIN) == LOW); 
+      unsigned long clickTimer = millis();
+
+      while (millis() - clickTimer < 800) {
+        if (digitalRead(BUTTON_PIN) == LOW) {
+          delay(50);
+          if (digitalRead(BUTTON_PIN) == LOW) {
+            clicks++;
+            while(digitalRead(BUTTON_PIN) == LOW); 
+            clickTimer = millis(); 
+          }
+        }
+      }
+
+      if (clicks >= 3) {
+        displayMode = 2; // Secret Mode
+        startTime = millis();
+        tone(BUZZER_PIN, NOTE_E5, 100); delay(150);
+        tone(BUZZER_PIN, NOTE_C6, 200); delay(200);
+      } else if (clicks == 2) {
+        displayMode = 3; // Passive Mode
+      } else {
+        displayMode = 1; // Active Heartbeat
+        startTime = millis();
+        playRandomSong();
+      }
+    }
+  }
+
+  if (isInterrupted) {
+    turnOffDevice();
+    return;
+  }
+
+  // --- MODE 1: ACTIVE BEATING HEART (8 Seconds) ---
+  if (displayMode == 1) {
+    if (millis() - startTime > HEART_TIME_LIMIT) {
+      turnOffDevice();
+      return;
+    }
+
+    display.clearDisplay();
+    drawHeart(64, 18, 1.8);
+    display.setCursor(14, 45);
+    display.print("Happy Anniversary");
+    display.setCursor(5, 55);
+    display.print("Mirabel, I love you!");
+    display.display();
+    setStripColor(255, 10, 40);
+    smartDelay(100);
+    if (isInterrupted) return;
+
+    display.clearDisplay();
+    drawHeart(64, 18, 1.4);
+    display.setCursor(14, 45);
+    display.print("Happy Anniversary");
+    display.setCursor(5, 55);
+    display.print("Mirabel, I love you!");
+    display.display();
+    setStripColor(60, 0, 15);
+    smartDelay(80);
+    if (isInterrupted) return;
+
+    display.clearDisplay();
+    drawHeart(64, 18, 2.0);
+    display.setCursor(14, 45);
+    display.print("Happy Anniversary");
+    display.setCursor(5, 55);
+    display.print("Mirabel, I love you!");
+    display.display();
+    setStripColor(255, 20, 60);
+    smartDelay(120);
+    if (isInterrupted) return;
+
+    display.clearDisplay();
+    drawHeart(64, 18, 1.3);
+    display.setCursor(14, 45);
+    display.print("Happy Anniversary");
+    display.setCursor(5, 55);
+    display.print("Mirabel, I love you!");
+    display.display();
+    setStripColor(20, 0, 5);
+    smartDelay(400); 
+  }
+
+  // --- MODE 3: PASSIVE SMOOTH PULSE (Infinite until clicked) ---
+  if (displayMode == 3) {
+    float pulse = (sin(millis() / 350.0) + 1.0) / 2.0; 
+    float heartScale = 1.3 + (pulse * 0.6); 
+
+    display.clearDisplay();
+    drawHeart(64, 18, heartScale);
+    display.setCursor(14, 45);
+    display.print("Happy Anniversary");
+    display.setCursor(5, 55);
+    display.print("Mirabel, I love you!");
+    display.display();
+
+    setStripColor(255 * pulse, 10 * pulse, 40 * pulse);
+    smartDelay(20); 
+  }
+
+  // --- MODE 2: SECRET LONG MESSAGE (15 Seconds) ---
+  if (displayMode == 2) {
+    if (millis() - startTime > SECRET_TIME_LIMIT) {
+      turnOffDevice();
+      return;
+    }
+
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print(secretMessage);
+    display.display();
+
+    float pulse = (sin(millis() / 300.0) + 1.0) / 2.0; 
+    setStripColor(150 * pulse, 0, 200 * pulse);
+    
+    smartDelay(50);
+  }
+}
