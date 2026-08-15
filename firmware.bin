@@ -13,12 +13,12 @@
 // ==========================================
 //           OTA CONFIGURATION
 // ==========================================
-const float FIRMWARE_VERSION = 1.01; // Increment this when you make new code!
+const float FIRMWARE_VERSION = 1.02; // Increment this when you make new code!
 
 // Change "your-username" and "repo-name" to your actual GitHub info.
 // Make sure to use the "raw.githubusercontent.com" URLs!
-const char* VERSION_CHECK_URL = "https://raw.githubusercontent.com/raghavangit/mirabel-altoid/refs/heads/main/version.txt?token=GHSAT0AAAAAAEFZD62FXYAAEFXTNZELIEKE2T7XZXQ";
-const char* FIRMWARE_BIN_URL  = "https://raw.githubusercontent.com/raghavangit/mirabel-altoid/refs/heads/main/firmware.bin?token=GHSAT0AAAAAAEFZD62E4UW35SIDC2PGF6QO2T7XY3A";
+const char* VERSION_CHECK_URL = "https://raw.githubusercontent.com/raghavangit/mirabel-altoid/refs/heads/main/version.txt";
+const char* FIRMWARE_BIN_URL  = "https://raw.githubusercontent.com/raghavangit/mirabel-altoid/refs/heads/main/firmware.bin";
 
 // ==========================================
 //           HARDWARE PINS
@@ -54,7 +54,7 @@ const char* secretMessage =
   "my absolute favorite.\n"
   "\n"
   "Happy Anniversary.\n"
-  "Test Complete.";
+  "Test done.";
 
 // ==========================================
 //           NOTE FREQUENCIES
@@ -193,15 +193,11 @@ void playRandomSong() {
 void checkForRemoteFirmwareUpdate() {
   if (WiFi.status() != WL_CONNECTED) return;
 
-  display.clearDisplay();
-  display.setCursor(0, 20);
-  display.print("Checking for updates..");
-  display.display();
-
   WiFiClientSecure client;
-  client.setInsecure(); // Allow HTTPS connection without root certs
+  client.setInsecure(); // Bypass SSL cert validation
 
   HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Follow GitHub redirects
   http.begin(client, VERSION_CHECK_URL);
   int httpCode = http.GET();
 
@@ -213,8 +209,9 @@ void checkForRemoteFirmwareUpdate() {
       display.setCursor(0, 20);
       display.print("Downloading update...");
       display.display();
-      setStripColor(0, 0, 255); // Solid blue during OTA download
+      setStripColor(0, 0, 255);
 
+      httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Follow redirects for the .bin download
       t_httpUpdate_return ret = httpUpdate.update(client, FIRMWARE_BIN_URL);
 
       switch (ret) {
@@ -224,12 +221,12 @@ void checkForRemoteFirmwareUpdate() {
         case HTTP_UPDATE_NO_UPDATES:
           break;
         case HTTP_UPDATE_OK:
-          break; // Board will automatically reboot here
+          break;
       }
     }
   }
   http.end();
-  setStripColor(0, 0, 0); // Turn LEDs back off
+  setStripColor(0, 0, 0);
 }
 
 // ==========================================
